@@ -1,5 +1,8 @@
+from datetime import datetime
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
+
+
 
 
 class WorkExperience(BaseModel):
@@ -82,4 +85,36 @@ class GeneratedResumeContent(TailoredResume):
 
 class GeneratedProposal(FreelanceProposal):
     pass
+
+
+class UserProfileResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    full_name: str
+    title: str
+    skills: List[str]
+    experience: List[WorkExperience]
+    projects: List[Project]
+    education: List[Education]
+    certifications: List[Certification]
+    created_at: datetime
+    updated_at: datetime
+
+
+class GenerationSessionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    profile_id: int
+    job_title: Optional[str]
+    job_description: str
+    job_analysis: JobAnalysisResult
+    match_score: JobMatchScore
+    generated_resume: Optional[GeneratedResumeContent]
+    generated_proposal: Optional[GeneratedProposal]
+    created_at: datetime
+    updated_at: datetime
+
+
 
