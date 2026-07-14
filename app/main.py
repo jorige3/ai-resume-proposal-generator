@@ -28,6 +28,21 @@ from app.services.job_analyzer import analyze_job_description
 from app.services.match_calculator import calculate_match_score
 from app.services.resume_generator import ResumeGenerator
 from app.services.proposal_generator import ProposalGenerator
+from app.services.pdf_exporter import export_resume_pdf, export_proposal_pdf, ExportError
+from app.services.docx_exporter import export_resume_docx, export_proposal_docx
+
+import re
+
+def get_filename_prefix(full_name: str) -> str:
+    """Helper to convert full name to a snake_case filename prefix."""
+    name_part = full_name.strip().lower()
+    if name_part:
+        name_part = re.sub(r'\s+', '_', name_part)
+        name_part = re.sub(r'[^a-z0-9_\-]', '', name_part)
+        name_part = re.sub(r'_+', '_', name_part).strip('_')
+    if not name_part:
+        name_part = "candidate"
+    return name_part
 
 # Ensure environments are loaded
 load_dotenv()
@@ -99,6 +114,8 @@ def db_get_profile(profile_id: int) -> Optional[UserProfile]:
             return UserProfile(
                 full_name=db_prof.full_name,
                 title=db_prof.title,
+                email=db_prof.email,
+                phone=db_prof.phone,
                 skills=db_prof.skills,
                 experience=[
                     WorkExperience(**exp) for exp in db_prof.experience
@@ -321,7 +338,7 @@ def run_app():
                     if col1.button(
                         f"📁 {s.job_title or 'Job'} ({date_str})",
                         key=f"load_s_{s.id}",
-                        use_container_width=True,
+                        width="stretch",
                     ):
                         st.session_state.job_title = s.job_title or ""
                         st.session_state.job_description_input = (
@@ -370,6 +387,14 @@ def run_app():
             "Professional Title", value=st.session_state.profile.title
         )
 
+        col_e, col_p = st.columns(2)
+        p_email = col_e.text_input(
+            "Email Address", value=st.session_state.profile.email or ""
+        )
+        p_phone = col_p.text_input(
+            "Phone Number", value=st.session_state.profile.phone or ""
+        )
+
         p_skills_str = st.text_area(
             "Skills (comma-separated)",
             value=", ".join(st.session_state.profile.skills),
@@ -378,6 +403,8 @@ def run_app():
 
         st.session_state.profile.full_name = p_name
         st.session_state.profile.title = p_title
+        st.session_state.profile.email = p_email.strip() if p_email.strip() else None
+        st.session_state.profile.phone = p_phone.strip() if p_phone.strip() else None
         st.session_state.profile.skills = [
             s.strip() for s in p_skills_str.split(",") if s.strip()
         ]
@@ -747,6 +774,44 @@ def run_app():
                 with col_resume:
                     st.markdown("### Tailored Resume Details")
 
+                    # Download buttons for Resume
+                    try:
+                        pdf_data = export_resume_pdf(
+                            st.session_state.profile,
+                            res_output,
+                            st.session_state.match_score
+                        )
+                        docx_data = export_resume_docx(
+                            st.session_state.profile,
+                            res_output,
+                            st.session_state.match_score
+                        )
+                        
+                        prefix = get_filename_prefix(st.session_state.profile.full_name)
+                        pdf_filename = f"{prefix}_tailored_resume.pdf"
+                        docx_filename = f"{prefix}_tailored_resume.docx"
+                        
+                        col_btn1, col_btn2 = st.columns(2)
+                        col_btn1.download_button(
+                            label="📥 PDF Resume",
+                            data=pdf_data,
+                            file_name=pdf_filename,
+                            mime="application/pdf",
+                            key="dl_resume_pdf"
+                        )
+                        col_btn2.download_button(
+                            label="📥 Word Resume",
+                            data=docx_data,
+                            file_name=docx_filename,
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            key="dl_resume_docx"
+                        )
+                    except ExportError as e:
+                        st.error(f"Failed to prepare resume exports: {e}")
+                    except Exception:
+                        logger.exception("Resume export generation failed")
+                        st.error("Failed to prepare resume exports due to an unexpected error.")
+
                     st.markdown("#### Tailored Professional Summary")
                     st.info(res_output.professional_summary)
 
@@ -763,6 +828,45 @@ def run_app():
 
                 with col_proposal:
                     st.markdown("### Freelance Proposal")
+
+                    # Download buttons for Proposal
+                    try:
+                        proposal_pdf = export_proposal_pdf(
+                            st.session_state.profile,
+                            prop_output,
+                            st.session_state.match_score
+                        )
+                        proposal_docx = export_proposal_docx(
+                            st.session_state.profile,
+                            prop_output,
+                            st.session_state.match_score
+                        )
+                        
+                        prefix = get_filename_prefix(st.session_state.profile.full_name)
+                        pdf_filename = f"{prefix}_proposal.pdf"
+                        docx_filename = f"{prefix}_proposal.docx"
+                        
+                        col_pbtn1, col_pbtn2 = st.columns(2)
+                        col_pbtn1.download_button(
+                            label="📥 PDF Proposal",
+                            data=proposal_pdf,
+                            file_name=pdf_filename,
+                            mime="application/pdf",
+                            key="dl_proposal_pdf"
+                        )
+                        col_pbtn2.download_button(
+                            label="📥 Word Proposal",
+                            data=proposal_docx,
+                            file_name=docx_filename,
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            key="dl_proposal_docx"
+                        )
+                    except ExportError as e:
+                        st.error(f"Failed to prepare proposal exports: {e}")
+                    except Exception:
+                        logger.exception("Proposal export generation failed")
+                        st.error("Failed to prepare proposal exports due to an unexpected error.")
+
                     st.text_area(
                         "Proposal Text (Copy Ready)",
                         value=prop_output.proposal_text,

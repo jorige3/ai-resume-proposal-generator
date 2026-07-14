@@ -36,6 +36,8 @@ class Certification(BaseModel):
 class UserProfile(BaseModel):
     full_name: str = Field(..., description="Full name of the candidate")
     title: str = Field(..., description="Professional headline or title")
+    email: Optional[str] = Field(None, description="Contact email address")
+    phone: Optional[str] = Field(None, description="Contact phone number")
     skills: List[str] = Field(default_factory=list, description="List of candidate skills")
     experience: List[WorkExperience] = Field(default_factory=list, description="Work history")
     projects: List[Project] = Field(default_factory=list, description="Personal or professional projects")
@@ -93,6 +95,8 @@ class UserProfileResponse(BaseModel):
     id: int
     full_name: str
     title: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
     skills: List[str]
     experience: List[WorkExperience]
     projects: List[Project]

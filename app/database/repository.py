@@ -21,6 +21,8 @@ class Repository:
         db_profile = DbUserProfile(
             full_name=profile.full_name,
             title=profile.title,
+            email=profile.email,
+            phone=profile.phone,
             skills=profile.skills,
             experience=[exp.model_dump() for exp in profile.experience],
             projects=[proj.model_dump() for proj in profile.projects],
@@ -56,6 +58,8 @@ class Repository:
 
         db_profile.full_name = profile.full_name
         db_profile.title = profile.title
+        db_profile.email = profile.email
+        db_profile.phone = profile.phone
         db_profile.skills = profile.skills
         db_profile.experience = [
             exp.model_dump() for exp in profile.experience

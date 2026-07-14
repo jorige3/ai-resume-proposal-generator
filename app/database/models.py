@@ -16,6 +16,8 @@ class DbUserProfile(Base):
     )
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     # SQLite JSON columns will host the nested lists/Pydantic schemas
     skills: Mapped[List[str]] = mapped_column(
