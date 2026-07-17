@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 
 from app.database import get_db_session, Repository
+from app.database.models import DbUserProfile, DbGenerationSession
 from app.models.schemas import (
     UserProfile,
     WorkExperience,
@@ -205,7 +206,69 @@ def db_delete_session(session_id: int) -> bool:
         db.close()
 
 
+def db_get_metrics():
+    """Calculates dashboard metrics and recent activity from SQLite."""
+    db = get_db_session()
+    try:
+        profiles_count = db.query(DbUserProfile).count()
+        sessions = db.query(DbGenerationSession).all()
+        apps_count = len(sessions)
+        
+        scores = []
+        for s in sessions:
+            if s.match_score and "overall_score" in s.match_score:
+                scores.append(s.match_score["overall_score"])
+                
+        avg_score = round(sum(scores) / len(scores), 1) if scores else 0.0
+        
+        from datetime import date
+        today = date.today()
+        today_count = sum(1 for s in sessions if s.created_at.date() == today)
+        
+        # Get recent activity
+        recent_sessions = sorted(sessions, key=lambda x: x.created_at, reverse=True)[:3]
+        recent_activity = []
+        for s in recent_sessions:
+            recent_activity.append({
+                "job_title": s.job_title or "Job Session",
+                "time": s.created_at.strftime("%Y-%m-%d %H:%M"),
+                "score": s.match_score.get("overall_score", 0) if s.match_score else 0
+            })
+            
+        return {
+            "profiles_count": profiles_count,
+            "apps_count": apps_count,
+            "avg_score": avg_score,
+            "today_count": today_count,
+            "recent_activity": recent_activity
+        }
+    except Exception as e:
+        logger.error("DB Error calculating metrics: %s", e)
+        return {
+            "profiles_count": 0,
+            "apps_count": 0,
+            "avg_score": 0.0,
+            "today_count": 0,
+            "recent_activity": []
+        }
+    finally:
+        db.close()
+
+
 # --- Streamlit Presentation Setup ---
+def section_header(icon: str, title: str):
+    """Helper to render a styled section header separator."""
+    st.markdown(
+        f"""
+        <div class="section-separator">
+            <span style="font-size: 1.6rem;">{icon}</span>
+            <span class="section-title">{title}</span>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
 def run_app():
     st.set_page_config(
         page_title="AI Resume & Proposal Generator", layout="wide"
@@ -215,34 +278,119 @@ def run_app():
     st.markdown(
         """
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+    
+    h1, h2, h3, h4, h5, h6 {
+        font-family: 'Outfit', sans-serif;
+    }
+    
     .title-gradient {
-        background: linear-gradient(90deg, #4A00E0, #8E2DE2);
+        background: linear-gradient(135deg, #1E3A8A 0%, #3B82F6 50%, #8B5CF6 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         font-weight: 800;
         font-size: 2.8rem;
-        margin-bottom: 0.5rem;
+        margin-bottom: 0.2rem;
+        letter-spacing: -1px;
     }
-    .metric-container {
-        border-radius: 8px;
-        padding: 15px;
+    
+    .subtitle {
+        font-size: 1.1rem;
+        color: #4B5563;
+        margin-bottom: 1.5rem;
+    }
+    
+    .section-separator {
+        border-bottom: 2px solid #F3F4F6;
+        margin-top: 2rem;
+        margin-bottom: 1.2rem;
+        padding-bottom: 0.4rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    
+    .section-title {
+        font-size: 1.4rem;
+        color: #1E3A8A;
+        font-weight: 700;
+        margin: 0;
+    }
+    
+    .metric-card {
+        border-radius: 12px;
+        padding: 1.25rem;
+        background-color: #FFFFFF;
+        border: 1px solid #E5E7EB;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        margin-bottom: 1rem;
+        text-align: center;
+    }
+    
+    .metric-value {
+        font-size: 1.8rem;
+        font-weight: 700;
+        color: #1E3A8A;
+    }
+    
+    .metric-label {
+        font-size: 0.9rem;
+        color: #6B7280;
+        font-weight: 500;
+    }
+    
+    .status-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.35rem 0.75rem;
+        border-radius: 9999px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+        width: 100%;
+        border: 1px solid #E5E7EB;
+    }
+    
+    .status-badge.green {
+        background-color: #ECFDF5;
+        color: #065F46;
+        border-color: #A7F3D0;
+    }
+    
+    .status-badge.red {
+        background-color: #FEF2F2;
+        color: #991B1B;
+        border-color: #FCA5A5;
+    }
+    
+    .recent-activity-item {
+        font-size: 0.9rem;
+        color: #4B5563;
+        padding: 0.5rem 0;
+        border-bottom: 1px solid #F3F4F6;
+    }
+    
+    .recent-activity-item:last-child {
+        border-bottom: none;
+    }
+    
+    .match-banner {
+        border-radius: 12px;
+        padding: 1.25rem;
         color: white;
         text-align: center;
-        margin-bottom: 20px;
+        margin-bottom: 1.5rem;
+        font-weight: 600;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
     }
     </style>
     """,
         unsafe_allow_html=True,
     )
-
-    st.markdown(
-        '<div class="title-gradient">AI Resume & Proposal Generator</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        "Tailor resume points and generate professional proposals targeting specific job details."
-    )
-    st.divider()
 
     # Session State Initialization
     if "profile" not in st.session_state:
@@ -269,35 +417,72 @@ def run_app():
         st.session_state.job_description_input = ""
     if "job_title" not in st.session_state:
         st.session_state.job_title = ""
+    if "is_saved" not in st.session_state:
+        st.session_state.is_saved = False
+    if "save_success" not in st.session_state:
+        st.session_state.save_success = False
+    if "load_success" not in st.session_state:
+        st.session_state.load_success = None
 
     # Initialize client
     ollama_client = OllamaClient()
+    ollama_ok = check_ollama_health(ollama_client)
+    db_ok = check_database_health()
+    profile_loaded = st.session_state.active_profile_id is not None
 
     # --- SIDEBAR CONTROL PANEL ---
     with st.sidebar:
-        st.header("Control Panel")
-
-        # 1. Verification Health Lights
-        st.subheader("System Status")
-        ollama_ok = check_ollama_health(ollama_client)
-        db_ok = check_database_health()
-
-        o_emoji = "🟢" if ollama_ok else "🔴"
-        d_emoji = "🟢" if db_ok else "🔴"
-
-        st.markdown(f"{o_emoji} **Ollama Connection**")
-        st.markdown(f"{d_emoji} **Database (SQLite)**")
+        st.markdown("### 🟢 System Status")
+        
+        # Ollama connection
+        if ollama_ok:
+            st.markdown('<div class="status-badge green">🟢 Ollama Connected</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="status-badge red">🔴 Ollama Disconnected</div>', unsafe_allow_html=True)
+            
+        # Database connection
+        if db_ok:
+            st.markdown('<div class="status-badge green">🟢 Database Connected</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="status-badge red">🔴 Database Disconnected</div>', unsafe_allow_html=True)
+            
+        # Profile status
+        if profile_loaded:
+            st.markdown('<div class="status-badge green">🟢 Profile Loaded</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="status-badge red">🔴 Profile Not Loaded</div>', unsafe_allow_html=True)
+            
+        st.divider()
+        
+        st.markdown("### ⚙️ Metadata")
+        st.markdown(f"**Model:** `{ollama_client.model}`")
+        st.markdown("**Database:** `SQLite`")
+        if profile_loaded:
+            st.markdown(f"**Profile:** `{st.session_state.profile.full_name}`")
+        else:
+            st.markdown("**Profile:** `None`")
+        st.markdown("**Branch:** `feature/phase-6-ui-improvements`")
+        
         st.divider()
 
-        # 2. Candidate Profiles dropdown
-        st.subheader("Active Profiles")
+        # Candidate Profiles dropdown
+        st.markdown("### 📁 Select Profile")
         profiles_list = db_list_profiles()
         options = {"New Profile (Unsaved)": None}
         for p in profiles_list:
             options[f"{p.full_name} - {p.title} (ID: {p.id})"] = p.id
 
+        # Determine index dynamically
+        index = 0
+        keys_list = list(options.keys())
+        if st.session_state.active_profile_id:
+            for idx, val in enumerate(options.values()):
+                if val == st.session_state.active_profile_id:
+                    index = idx
+                    break
+
         selected_label = st.selectbox(
-            "Select Profile", options=list(options.keys())
+            "Select Candidate Profile", options=keys_list, index=index
         )
         selected_id = options[selected_label]
 
@@ -323,82 +508,107 @@ def run_app():
             st.session_state.match_score = None
             st.session_state.resume_content = None
             st.session_state.proposal_content = None
+            st.session_state.is_saved = False
             st.rerun()
 
-        st.divider()
+    # --- MAIN VIEW ---
+    # Gradient Header
+    st.markdown('<div class="title-gradient">AI Resume & Proposal Generator</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Tailor resume points and generate professional proposals targeting specific job details.</div>', unsafe_allow_html=True)
 
-        # 3. List Saved Sessions
-        st.subheader("Application History")
-        if st.session_state.active_profile_id:
-            sessions = db_list_sessions(st.session_state.active_profile_id)
-            if sessions:
-                for s in sessions:
-                    date_str = s.created_at.strftime("%Y-%m-%d %H:%M")
-                    col1, col2 = st.columns([5, 1])
-                    if col1.button(
-                        f"📁 {s.job_title or 'Job'} ({date_str})",
-                        key=f"load_s_{s.id}",
-                        width="stretch",
-                    ):
-                        st.session_state.job_title = s.job_title or ""
-                        st.session_state.job_description_input = (
-                            s.job_description
-                        )
-                        st.session_state.job_analysis = JobAnalysisResult(
-                            **s.job_analysis
-                        )
-                        st.session_state.match_score = JobMatchScore(
-                            **s.match_score
-                        )
-                        st.session_state.resume_content = (
-                            GeneratedResumeContent(**s.generated_resume)
-                            if s.generated_resume
-                            else None
-                        )
-                        st.session_state.proposal_content = (
-                            GeneratedProposal(**s.generated_proposal)
-                            if s.generated_proposal
-                            else None
-                        )
-                        st.success(f"Loaded application history for {s.job_title}!")
-                        st.rerun()
-                    if col2.button("🗑️", key=f"del_s_{s.id}"):
-                        if db_delete_session(s.id):
-                            st.success("Session removed.")
-                            st.rerun()
-            else:
-                st.info("No applications saved for this profile.")
-        else:
-            st.info("Save profile first to track history.")
+    # Metrics Section
+    metrics = db_get_metrics()
+    m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+    with m_col1:
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <div class="metric-value">{metrics['profiles_count']}</div>
+                <div class="metric-label">Candidate Profiles</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    with m_col2:
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <div class="metric-value">{metrics['apps_count']}</div>
+                <div class="metric-label">Saved Applications</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    with m_col3:
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <div class="metric-value">{metrics['avg_score']}%</div>
+                <div class="metric-label">Avg Match Score</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    with m_col4:
+        st.markdown(
+            f"""
+            <div class="metric-card">
+                <div class="metric-value">{metrics['today_count']}</div>
+                <div class="metric-label">Today's Sessions</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-    # --- MAIN VIEW TABS ---
-    tab_profile, tab_match, tab_ai = st.tabs(
-        ["👤 Profile Editor", "🔍 Job Matching", "✍️ AI Content Generator"]
-    )
+    # Recent Activity Expander
+    if metrics["recent_activity"]:
+        with st.expander("⏱️ Recent Activity Logs", expanded=False):
+            for act in metrics["recent_activity"]:
+                st.markdown(
+                    f"""
+                    <div class="recent-activity-item">
+                        📝 Loaded <b>{act['job_title']}</b> ({act['score']}% Match) saved at <i>{act['time']}</i>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
 
-    # --- TAB 1: PROFILE EDITOR ---
-    with tab_profile:
+    st.divider()
+
+    # Dynamic notifications
+    if st.session_state.save_success:
+        st.success("✅ Application saved successfully.")
+        st.session_state.save_success = False
+
+    if st.session_state.load_success:
+        st.success(f"✅ {st.session_state.load_success}")
+        st.session_state.load_success = None
+
+    # --- SECTION 1: PROFILE ---
+    section_header("👤", "Profile")
+    with st.expander("Edit Candidate Profile Details", expanded=not profile_loaded):
         st.subheader("Candidate Information")
         col_n, col_t = st.columns(2)
         p_name = col_n.text_input(
-            "Full Name", value=st.session_state.profile.full_name
+            "Full Name", value=st.session_state.profile.full_name, key="profile_full_name_input"
         )
         p_title = col_t.text_input(
-            "Professional Title", value=st.session_state.profile.title
+            "Professional Title", value=st.session_state.profile.title, key="profile_title_input"
         )
 
         col_e, col_p = st.columns(2)
         p_email = col_e.text_input(
-            "Email Address", value=st.session_state.profile.email or ""
+            "Email Address", value=st.session_state.profile.email or "", key="profile_email_input"
         )
         p_phone = col_p.text_input(
-            "Phone Number", value=st.session_state.profile.phone or ""
+            "Phone Number", value=st.session_state.profile.phone or "", key="profile_phone_input"
         )
 
         p_skills_str = st.text_area(
             "Skills (comma-separated)",
             value=", ".join(st.session_state.profile.skills),
             placeholder="e.g. Python, SQL, REST APIs, Git",
+            key="profile_skills_input"
         )
 
         st.session_state.profile.full_name = p_name
@@ -422,6 +632,7 @@ def run_app():
                     f"Remove Work Experience {i+1}", key=f"rem_exp_{i}"
                 ):
                     st.session_state.profile.experience.pop(i)
+                    st.session_state.is_saved = False
                     st.rerun()
 
         with st.form("add_exp_form", clear_on_submit=True):
@@ -443,6 +654,7 @@ def run_app():
                         description=desc,
                     )
                     st.session_state.profile.experience.append(new_exp)
+                    st.session_state.is_saved = False
                     st.success("Experience added!")
                     st.rerun()
                 else:
@@ -462,6 +674,7 @@ def run_app():
                     st.write(f"[Project URL]({proj.url})")
                 if st.button(f"Remove Project {i+1}", key=f"rem_proj_{i}"):
                     st.session_state.profile.projects.pop(i)
+                    st.session_state.is_saved = False
                     st.rerun()
 
         with st.form("add_proj_form", clear_on_submit=True):
@@ -483,6 +696,7 @@ def run_app():
                         url=url_proj if url_proj.strip() else None,
                     )
                     st.session_state.profile.projects.append(new_proj)
+                    st.session_state.is_saved = False
                     st.success("Project added!")
                     st.rerun()
                 else:
@@ -505,6 +719,7 @@ def run_app():
                 )
                 if st.button(f"Remove Education {i+1}", key=f"rem_edu_{i}"):
                     st.session_state.profile.education.pop(i)
+                    st.session_state.is_saved = False
                     st.rerun()
 
             with st.form("add_edu_form", clear_on_submit=True):
@@ -529,6 +744,7 @@ def run_app():
                             graduation_year=int(grad),
                         )
                         st.session_state.profile.education.append(new_edu)
+                        st.session_state.is_saved = False
                         st.success("Education added!")
                         st.rerun()
 
@@ -543,6 +759,7 @@ def run_app():
                     f"Remove Certification {i+1}", key=f"rem_cert_{i}"
                 ):
                     st.session_state.profile.certifications.pop(i)
+                    st.session_state.is_saved = False
                     st.rerun()
 
             with st.form("add_cert_form", clear_on_submit=True):
@@ -562,13 +779,14 @@ def run_app():
                             year=int(c_yr),
                         )
                         st.session_state.profile.certifications.append(new_cert)
+                        st.session_state.is_saved = False
                         st.success("Certification added!")
                         st.rerun()
 
         st.divider()
 
         # Database save trigger
-        if st.button("💾 Save Profile to Database", type="primary"):
+        if st.button("💾 Save Profile to Database", type="primary", key="save_profile_btn_top"):
             if (
                 not st.session_state.profile.full_name
                 or not st.session_state.profile.title
@@ -580,46 +798,87 @@ def run_app():
                 )
                 if saved_prof_id:
                     st.session_state.active_profile_id = saved_prof_id
+                    st.session_state.is_saved = False
                     st.success("Profile saved successfully!")
                     st.rerun()
                 else:
                     st.error("Failed to save profile. Check SQLite connection.")
 
-    # --- TAB 2: JOB DESCRIPTION & MATCH ---
-    with tab_match:
-        st.subheader("Job Reference Details")
+    # --- SECTION 2: JOB MATCHING ---
+    section_header("💼", "Job Matching")
+    with st.container(border=True):
         st.session_state.job_title = st.text_input(
             "Job Title Reference",
             value=st.session_state.job_title,
             placeholder="e.g. Senior Backend Engineer",
+            key="job_title_match_input"
         )
 
         st.session_state.job_description_input = st.text_area(
             "Paste Job Description Here",
             value=st.session_state.job_description_input,
-            height=300,
+            height=200,
             placeholder="Paste text contents...",
+            key="job_desc_match_input"
         )
 
-        if st.button("🔍 Match Job Description & Profile", type="primary"):
-            if not st.session_state.job_description_input.strip():
-                st.error("Please insert a job description.")
-            else:
-                with st.spinner("Analyzing requirements..."):
-                    # 1. Parse jd
-                    parsed_analysis = analyze_job_description(
-                        st.session_state.job_description_input
-                    )
-                    st.session_state.job_analysis = parsed_analysis
+        col_m, col_g = st.columns(2)
+        with col_m:
+            if st.button("🔍 Match Job Description & Profile", type="primary", width="stretch", key="run_match_btn"):
+                if not st.session_state.job_description_input.strip():
+                    st.error("Please insert a job description.")
+                else:
+                    with st.spinner("Analyzing requirements..."):
+                        parsed_analysis = analyze_job_description(
+                            st.session_state.job_description_input
+                        )
+                        st.session_state.job_analysis = parsed_analysis
 
-                    # 2. Score calculations
-                    calculated_score = calculate_match_score(
-                        st.session_state.profile, parsed_analysis
-                    )
-                    st.session_state.match_score = calculated_score
-                    st.success("Match Score analysis complete!")
+                        calculated_score = calculate_match_score(
+                            st.session_state.profile, parsed_analysis
+                        )
+                        st.session_state.match_score = calculated_score
+                        st.session_state.is_saved = False
+                        st.success("Match Score analysis complete!")
+                        st.rerun()
+                        
+        with col_g:
+            match_ready = st.session_state.job_analysis is not None and st.session_state.match_score is not None
+            if st.button("✨ Generate Tailored Assets", type="secondary", disabled=not match_ready, width="stretch", key="run_generate_btn"):
+                if not ollama_ok:
+                    st.error("Ollama is not running. Start Ollama model to generate AI content.")
+                else:
+                    # Sequential loaders
+                    with st.spinner("Analyzing job description..."):
+                        import time
+                        time.sleep(0.5)
+                        
+                    with st.spinner("Generating tailored resume..."):
+                        res_builder = ResumeGenerator(ollama_client)
+                        tailored_resume = res_builder.generate_resume(
+                            st.session_state.profile,
+                            st.session_state.job_analysis,
+                        )
+                        st.session_state.resume_content = tailored_resume
+                        
+                    with st.spinner("Generating freelance proposal..."):
+                        prop_builder = ProposalGenerator(ollama_client)
+                        job_in = JobDescriptionInput(
+                            text=st.session_state.job_description_input
+                        )
+                        tailored_proposal = prop_builder.generate_proposal(
+                            st.session_state.profile,
+                            job_in,
+                            st.session_state.job_analysis,
+                            st.session_state.match_score,
+                        )
+                        st.session_state.proposal_content = tailored_proposal
+                        
+                    st.session_state.is_saved = False
+                    st.success("Assets tailored successfully!")
                     st.rerun()
 
+        # Display matching calculations
         if st.session_state.match_score and st.session_state.job_analysis:
             score = st.session_state.match_score
             analysis = st.session_state.job_analysis
@@ -629,7 +888,7 @@ def run_app():
             # Render Score Banner
             color = get_match_color(score.overall_score)
             st.markdown(
-                f'<div class="metric-container" style="background-color: {color};">'
+                f'<div class="match-banner" style="background-color: {color};">'
                 f'<span style="font-size: 1.6rem; font-weight: bold;">Match Compatibility: {score.overall_score}%</span>'
                 f'<br/><span style="font-size: 0.95rem;">{score.explanation}</span>'
                 f'</div>',
@@ -686,66 +945,132 @@ def run_app():
                         f"*... and {len(analysis.responsibilities) - 5} more.*"
                     )
 
-    # --- TAB 3: AI CONTENT GENERATION ---
-    with tab_ai:
-        st.subheader("Generate Tailored Assets")
+    # --- SECTION 3: AI RESUME GENERATOR ---
+    section_header("🤖", "AI Resume Generator")
+    if not st.session_state.resume_content:
+        st.info("Tailored resume content will be displayed here after you click 'Generate Tailored Assets' in the Job Matching section.")
+    else:
+        res_output = st.session_state.resume_content
+        with st.container(border=True):
+            # Download buttons for Resume
+            try:
+                pdf_data = export_resume_pdf(
+                    st.session_state.profile,
+                    res_output,
+                    st.session_state.match_score
+                )
+                docx_data = export_resume_docx(
+                    st.session_state.profile,
+                    res_output,
+                    st.session_state.match_score
+                )
+                
+                prefix = get_filename_prefix(st.session_state.profile.full_name)
+                pdf_filename = f"{prefix}_tailored_resume.pdf"
+                docx_filename = f"{prefix}_tailored_resume.docx"
+                
+                col_btn1, col_btn2 = st.columns(2)
+                col_btn1.download_button(
+                    label="📄 Download Resume PDF",
+                    data=pdf_data,
+                    file_name=pdf_filename,
+                    mime="application/pdf",
+                    key="dl_resume_pdf_dash",
+                    width="stretch"
+                )
+                col_btn2.download_button(
+                    label="📄 Download Resume DOCX",
+                    data=docx_data,
+                    file_name=docx_filename,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key="dl_resume_docx_dash",
+                    width="stretch"
+                )
+            except ExportError as e:
+                st.error(f"Failed to prepare resume exports: {e}")
+            except Exception:
+                logger.exception("Resume export generation failed")
+                st.error("Failed to prepare resume exports due to an unexpected error.")
 
-        if not st.session_state.job_analysis or not st.session_state.match_score:
-            st.warning("Analyze a job description first (Tab 2) to build matching facts.")
-        else:
-            if st.button("✨ Call AI to Generate Tailored Assets", type="primary"):
-                if not ollama_ok:
-                    st.error("Ollama is not running. Start Ollama model to generate AI content.")
-                else:
-                    with st.spinner("Tailoring content (calling Ollama local AI)..."):
-                        try:
-                            # 1. Resume Generator
-                            res_builder = ResumeGenerator(ollama_client)
-                            tailored_resume = res_builder.generate_resume(
-                                st.session_state.profile,
-                                st.session_state.job_analysis,
-                            )
-                            st.session_state.resume_content = tailored_resume
+            st.markdown("#### Tailored Professional Summary")
+            st.info(res_output.professional_summary)
 
-                            # 2. Proposal Generator
-                            prop_builder = ProposalGenerator(ollama_client)
-                            job_in = JobDescriptionInput(
-                                text=st.session_state.job_description_input
-                            )
-                            tailored_proposal = prop_builder.generate_proposal(
-                                st.session_state.profile,
-                                job_in,
-                                st.session_state.job_analysis,
-                                st.session_state.match_score,
-                            )
-                            st.session_state.proposal_content = tailored_proposal
+            st.markdown("#### Tailored Focus Skills")
+            st.write(", ".join(res_output.tailored_skills))
 
-                            st.success("Assets tailored successfully!")
-                            st.rerun()
-                        except Exception as ex:
-                            st.error(f"Failed to generate assets: {ex}")
-                            logger.error("Ollama AI call failed: %s", ex)
+            st.markdown("#### Improvement Suggestions")
+            for sug in res_output.improvement_suggestions:
+                st.markdown(f"- {sug}")
 
-            # Display generated output
-            if (
-                st.session_state.resume_content
-                and st.session_state.proposal_content
-            ):
-                res_output = st.session_state.resume_content
-                prop_output = st.session_state.proposal_content
+            st.markdown("#### Missing Skills Report")
+            for rep in res_output.missing_skills_report:
+                st.markdown(f"- {rep}")
 
-                st.divider()
+    # --- SECTION 4: PROPOSAL GENERATOR ---
+    section_header("📑", "Proposal Generator")
+    if not st.session_state.proposal_content:
+        st.info("Tailored freelance proposal will be displayed here after you click 'Generate Tailored Assets' in the Job Matching section.")
+    else:
+        prop_output = st.session_state.proposal_content
+        with st.container(border=True):
+            # Download buttons for Proposal
+            try:
+                proposal_pdf = export_proposal_pdf(
+                    st.session_state.profile,
+                    prop_output,
+                    st.session_state.match_score
+                )
+                proposal_docx = export_proposal_docx(
+                    st.session_state.profile,
+                    prop_output,
+                    st.session_state.match_score
+                )
+                
+                prefix = get_filename_prefix(st.session_state.profile.full_name)
+                pdf_filename = f"{prefix}_proposal.pdf"
+                docx_filename = f"{prefix}_proposal.docx"
+                
+                col_pbtn1, col_pbtn2 = st.columns(2)
+                col_pbtn1.download_button(
+                    label="📄 Download Proposal PDF",
+                    data=proposal_pdf,
+                    file_name=pdf_filename,
+                    mime="application/pdf",
+                    key="dl_proposal_pdf_dash",
+                    width="stretch"
+                )
+                col_pbtn2.download_button(
+                    label="📄 Download Proposal DOCX",
+                    data=proposal_docx,
+                    file_name=docx_filename,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key="dl_proposal_docx_dash",
+                    width="stretch"
+                )
+            except ExportError as e:
+                st.error(f"Failed to prepare proposal exports: {e}")
+            except Exception:
+                logger.exception("Proposal export generation failed")
+                st.error("Failed to prepare proposal exports due to an unexpected error.")
 
-                # Save Results Trigger
-                if st.button(
-                    "💾 Save Assets and Session to Database",
-                    key="save_sess_btn",
-                ):
-                    if not st.session_state.active_profile_id:
-                        st.error(
-                            "Please save the Candidate Profile (Tab 1) before storing applications."
-                        )
-                    else:
+            st.text_area(
+                "Proposal Text (Copy Ready)",
+                value=prop_output.proposal_text,
+                height=400,
+                key="prop_text_dash_disp"
+            )
+
+    # --- SAVE APPLICATION TRIGGER ---
+    if st.session_state.resume_content and st.session_state.proposal_content:
+        st.divider()
+        col_save_btn, col_status = st.columns([1, 2])
+        with col_save_btn:
+            save_disabled = st.session_state.get("is_saved", False)
+            if not st.session_state.active_profile_id:
+                st.button("💾 Save Application", disabled=True, help="Save Candidate Profile first")
+            else:
+                if st.button("💾 Save Application", key="save_app_btn_dash", disabled=save_disabled, type="primary", width="stretch"):
+                    with st.spinner("Saving application..."):
                         saved_sess_id = db_save_session(
                             profile_id=st.session_state.active_profile_id,
                             job_title=(
@@ -756,122 +1081,65 @@ def run_app():
                             job_description=st.session_state.job_description_input,
                             job_analysis=st.session_state.job_analysis,
                             match_score=st.session_state.match_score,
-                            generated_resume=res_output,
-                            generated_proposal=prop_output,
+                            generated_resume=st.session_state.resume_content,
+                            generated_proposal=st.session_state.proposal_content,
                         )
                         if saved_sess_id:
-                            st.success(
-                                "Application session stored successfully!"
-                            )
+                            st.session_state.is_saved = True
+                            st.session_state.save_success = True
                             st.rerun()
                         else:
                             st.error("Failed to save session. Database error.")
+        with col_status:
+            if st.session_state.get("is_saved", False):
+                st.markdown("<div style='padding-top: 10px; color: green; font-weight: bold;'>✅ Saved to Applications Database</div>", unsafe_allow_html=True)
+            else:
+                st.markdown("<div style='padding-top: 10px; color: orange;'>⚠️ Unsaved Generation Session</div>", unsafe_allow_html=True)
 
-                st.divider()
-
-                col_resume, col_proposal = st.columns(2)
-
-                with col_resume:
-                    st.markdown("### Tailored Resume Details")
-
-                    # Download buttons for Resume
-                    try:
-                        pdf_data = export_resume_pdf(
-                            st.session_state.profile,
-                            res_output,
-                            st.session_state.match_score
+    # --- SECTION 5: SAVED APPLICATIONS ---
+    section_header("📚", "Saved Applications")
+    if not st.session_state.active_profile_id:
+        st.info("Please select or save a candidate profile to view application history.")
+    else:
+        sessions = db_list_sessions(st.session_state.active_profile_id)
+        if not sessions:
+            st.info("No saved applications found for this profile.")
+        else:
+            cols = st.columns(3)
+            for idx, s in enumerate(sessions):
+                col = cols[idx % 3]
+                with col.container(border=True):
+                    st.markdown(f"#### {s.job_title or 'Job'}")
+                    overall_score = s.match_score.get("overall_score", 0) if s.match_score else 0
+                    st.markdown(f"**Score:** {overall_score}% Match")
+                    st.markdown(f"*Saved: {s.created_at.strftime('%Y-%m-%d %H:%M')}*")
+                    
+                    c_load, c_del = st.columns(2)
+                    if c_load.button("📂 Load", key=f"load_s_dash_{s.id}", width="stretch"):
+                        st.session_state.job_title = s.job_title or ""
+                        st.session_state.job_description_input = s.job_description
+                        st.session_state.job_analysis = JobAnalysisResult(**s.job_analysis)
+                        st.session_state.match_score = JobMatchScore(**s.match_score)
+                        st.session_state.resume_content = (
+                            GeneratedResumeContent(**s.generated_resume)
+                            if s.generated_resume
+                            else None
                         )
-                        docx_data = export_resume_docx(
-                            st.session_state.profile,
-                            res_output,
-                            st.session_state.match_score
+                        st.session_state.proposal_content = (
+                            GeneratedProposal(**s.generated_proposal)
+                            if s.generated_proposal
+                            else None
                         )
+                        st.session_state.is_saved = True
+                        st.session_state.load_success = f"Loaded application details for '{s.job_title}'."
+                        st.rerun()
                         
-                        prefix = get_filename_prefix(st.session_state.profile.full_name)
-                        pdf_filename = f"{prefix}_tailored_resume.pdf"
-                        docx_filename = f"{prefix}_tailored_resume.docx"
-                        
-                        col_btn1, col_btn2 = st.columns(2)
-                        col_btn1.download_button(
-                            label="📥 PDF Resume",
-                            data=pdf_data,
-                            file_name=pdf_filename,
-                            mime="application/pdf",
-                            key="dl_resume_pdf"
-                        )
-                        col_btn2.download_button(
-                            label="📥 Word Resume",
-                            data=docx_data,
-                            file_name=docx_filename,
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            key="dl_resume_docx"
-                        )
-                    except ExportError as e:
-                        st.error(f"Failed to prepare resume exports: {e}")
-                    except Exception:
-                        logger.exception("Resume export generation failed")
-                        st.error("Failed to prepare resume exports due to an unexpected error.")
-
-                    st.markdown("#### Tailored Professional Summary")
-                    st.info(res_output.professional_summary)
-
-                    st.markdown("#### Tailored Focus Skills")
-                    st.write(", ".join(res_output.tailored_skills))
-
-                    st.markdown("#### Improvement Suggestions")
-                    for sug in res_output.improvement_suggestions:
-                        st.markdown(f"- {sug}")
-
-                    st.markdown("#### Missing Skills Report")
-                    for rep in res_output.missing_skills_report:
-                        st.markdown(f"- {rep}")
-
-                with col_proposal:
-                    st.markdown("### Freelance Proposal")
-
-                    # Download buttons for Proposal
-                    try:
-                        proposal_pdf = export_proposal_pdf(
-                            st.session_state.profile,
-                            prop_output,
-                            st.session_state.match_score
-                        )
-                        proposal_docx = export_proposal_docx(
-                            st.session_state.profile,
-                            prop_output,
-                            st.session_state.match_score
-                        )
-                        
-                        prefix = get_filename_prefix(st.session_state.profile.full_name)
-                        pdf_filename = f"{prefix}_proposal.pdf"
-                        docx_filename = f"{prefix}_proposal.docx"
-                        
-                        col_pbtn1, col_pbtn2 = st.columns(2)
-                        col_pbtn1.download_button(
-                            label="📥 PDF Proposal",
-                            data=proposal_pdf,
-                            file_name=pdf_filename,
-                            mime="application/pdf",
-                            key="dl_proposal_pdf"
-                        )
-                        col_pbtn2.download_button(
-                            label="📥 Word Proposal",
-                            data=proposal_docx,
-                            file_name=docx_filename,
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            key="dl_proposal_docx"
-                        )
-                    except ExportError as e:
-                        st.error(f"Failed to prepare proposal exports: {e}")
-                    except Exception:
-                        logger.exception("Proposal export generation failed")
-                        st.error("Failed to prepare proposal exports due to an unexpected error.")
-
-                    st.text_area(
-                        "Proposal Text (Copy Ready)",
-                        value=prop_output.proposal_text,
-                        height=500,
-                    )
+                    if c_del.button("🗑️ Delete", key=f"del_s_dash_{s.id}", width="stretch"):
+                        with st.spinner("Deleting application..."):
+                            if db_delete_session(s.id):
+                                st.session_state.is_saved = False
+                                st.session_state.load_success = "Application removed successfully."
+                                st.rerun()
 
 
 # Run the application when runtime is active
